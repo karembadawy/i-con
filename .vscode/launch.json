@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:i-con}",
+      "name": "Debug ICon",
+      "target": "ICon",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug ICon"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:i-con}",
+      "name": "Release ICon",
+      "target": "ICon",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release ICon"
+    }
+  ]
+}
