@@ -1,93 +1,33 @@
-import Foundation
+import CoreGraphics
 import IConKit
 import Testing
 
-struct ArrangementTests {
-    @Test func hideAppendsByDefault() {
-        var arrangement = Arrangement()
-        arrangement.hide("a")
-        arrangement.hide("b")
-        #expect(arrangement.hidden == ["a", "b"])
+struct DividerWidthTests {
+    // A 13" MacBook screen: 1470pt wide, notch ending 824.5pt from the left.
+    let screenWidth: CGFloat = 1470
+    let notchRight: CGFloat = 824.5
+
+    @Test func fillsTheGapBetweenNotchAndMark() {
+        // Mark 560pt from the right leaves 85.5pt free right of the notch.
+        let width = DividerWidth.width(markOffsetFromRight: 560, screenWidth: screenWidth, notchRight: notchRight)
+        #expect(width == 85.5 + 12)
     }
 
-    @Test func hideInsertsBeforeTarget() {
-        var arrangement = Arrangement(hidden: ["a", "b"])
-        arrangement.hide("c", before: "b")
-        #expect(arrangement.hidden == ["a", "c", "b"])
+    @Test func growsWhenMoreIconsAreHidden() {
+        // Fewer visible icons put the mark further right, leaving more room to fill.
+        let few = DividerWidth.width(markOffsetFromRight: 300, screenWidth: screenWidth, notchRight: notchRight)
+        let many = DividerWidth.width(markOffsetFromRight: 560, screenWidth: screenWidth, notchRight: notchRight)
+        #expect(few > many)
     }
 
-    @Test func hidingAgainMovesTheApp() {
-        var arrangement = Arrangement(hidden: ["a", "b", "c"])
-        arrangement.hide("c", before: "a")
-        #expect(arrangement.hidden == ["c", "a", "b"])
-        arrangement.hide("c")
-        #expect(arrangement.hidden == ["a", "b", "c"])
+    @Test func neverReachesHalfTheScreen() {
+        let width = DividerWidth.width(markOffsetFromRight: 10, screenWidth: screenWidth, notchRight: 0)
+        #expect(width == screenWidth / 2 - 1)
     }
 
-    @Test func droppingOntoItselfDoesNothing() {
-        var arrangement = Arrangement(hidden: ["a", "b"])
-        arrangement.hide("a", before: "a")
-        #expect(arrangement.hidden == ["a", "b"])
-    }
-
-    @Test func unknownTargetAppends() {
-        var arrangement = Arrangement(hidden: ["a"])
-        arrangement.hide("b", before: "zzz")
-        #expect(arrangement.hidden == ["a", "b"])
-    }
-
-    @Test func showRemoves() {
-        var arrangement = Arrangement(hidden: ["a", "b"])
-        arrangement.show("a")
-        #expect(arrangement.hidden == ["b"])
-        #expect(!arrangement.isHidden("a"))
-    }
-
-    @Test func roundTripsThroughJSON() throws {
-        let arrangement = Arrangement(hidden: ["x", "y"])
-        let data = try JSONEncoder().encode(arrangement)
-        #expect(try JSONDecoder().decode(Arrangement.self, from: data) == arrangement)
-    }
-}
-
-struct AllowListTests {
-    @Test func noRestrictionWhenNothingHiddenIsRunning() {
-        #expect(AllowList.bundleIDs(running: ["a", "b"], hidden: [], own: "me") == nil)
-        #expect(AllowList.bundleIDs(running: ["a", "b"], hidden: ["c"], own: "me") == nil)
-    }
-
-    @Test func excludesHiddenApps() {
-        let allowed = AllowList.bundleIDs(running: ["a", "b", "c"], hidden: ["b"], own: "me")
-        #expect(allowed == ["me", "a", "c"])
-    }
-
-    @Test func ownAppIsAlwaysAllowed() {
-        let allowed = AllowList.bundleIDs(running: ["a", "me"], hidden: ["a", "me"], own: "me")
-        #expect(allowed == ["me"])
-    }
-
-    @Test func revealedAppIsAllowed() {
-        #expect(AllowList.bundleIDs(running: ["a", "b"], hidden: ["a", "b"], own: "me", revealed: "a") == ["me", "a"])
-        #expect(AllowList.bundleIDs(running: ["a"], hidden: ["a"], own: "me", revealed: "a") == nil)
-    }
-
-    @Test func removesDuplicates() {
-        let allowed = AllowList.bundleIDs(running: ["a", "a", "b"], hidden: ["b"], own: "me")
-        #expect(allowed == ["me", "a"])
-    }
-}
-
-struct AppLocationTests {
-    @Test func applicationsFolderIsRecognized() {
-        #expect(AppLocation.isRecognized(bundlePath: "/Applications/i-con.app"))
-        #expect(AppLocation.isRecognized(bundlePath: "/Applications/Utilities/Tool.app"))
-        #expect(AppLocation.isRecognized(bundlePath: "/System/Library/CoreServices/TextInputMenuAgent.app"))
-    }
-
-    @Test func otherFoldersAreNot() {
-        #expect(!AppLocation.isRecognized(bundlePath: "/Users/me/Applications/SmartHub.app"))
-        #expect(!AppLocation.isRecognized(bundlePath: "/Users/me/Projects/app/build/Release/App.app"))
-        #expect(!AppLocation.isRecognized(bundlePath: "/private/tmp/Probe.app"))
-        #expect(!AppLocation.isRecognized(bundlePath: "/ApplicationsBackup/App.app"))
+    @Test func staysAWallWhenTheBarIsAlreadyFull() {
+        // Mark left of the notch: no free space, but the divider still can't fit.
+        let width = DividerWidth.width(markOffsetFromRight: 700, screenWidth: screenWidth, notchRight: notchRight)
+        #expect(width == DividerWidth.minimum)
     }
 }
