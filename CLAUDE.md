@@ -117,6 +117,8 @@ Two rules:
 
 ## Product decisions (made by the user; don't reintroduce)
 
+- **The lockdown popup (this branch) is the chosen approach.** The `native-overflow` branch tried the alternative: a blank divider that makes macOS tuck the icons to its left behind its own « button. It works, but it adds almost nothing over macOS 27's built-in overflow. Nothing gets tucked away on a roomy external display, and on the notched screen macOS already tucks icons away. The user went back to this branch. That branch's CLAUDE.md records what was learned about «.
+
 - Drag and drop happens only inside the popup, in Edit mode. A ⌘-drag-into-popup feature was built and then removed because it deleted icons. A "drop on ▾" alternative was declined.
 - The popup opens on **click only**. Hover-to-open was built and then removed at the user's request.
 - Launch at login uses `SMAppService.mainApp`, from the gear menu in the popup.
