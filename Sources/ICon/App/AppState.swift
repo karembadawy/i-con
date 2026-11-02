@@ -128,7 +128,7 @@ final class AppState {
     /// Rescans the menu bar. Captures icons that are missing, or every visible icon with `captureAll`.
     func refresh(captureAll: Bool = false) async {
         guard permissions.accessibility else { return }
-        update(with: await AXInventory.scan(AXInventory.runningApps()))
+        await scanMenuBar()
         logger.debug("Found \(self.items.count) apps with menu bar items")
         let ids = items.map(\.bundleID).filter { captureAll || icons.needsCapture($0) }
         await captureIcons(for: Set(ids))
@@ -139,7 +139,7 @@ final class AppState {
         if waitForLayout {
             await waitForSettledLayout()
         } else {
-            update(with: await AXInventory.scan(AXInventory.runningApps()))
+            await scanMenuBar()
         }
         // Hidden apps report stale frames, so they're left out of the obstacles.
         let visible = items.filter { !isCurrentlyHidden($0.bundleID) }
@@ -162,7 +162,7 @@ final class AppState {
         for _ in 0..<12 {
             try? await Task.sleep(for: .milliseconds(150))
             let before = layout
-            update(with: await AXInventory.scan(AXInventory.runningApps()))
+            await scanMenuBar()
             if layout == before { return }
         }
         logger.debug("Menu bar layout didn't settle")
@@ -174,8 +174,20 @@ final class AppState {
         return layout
     }
 
-    private func update(with scanned: [MenuBarItem]) {
-        items = scanned.filter { $0.bundleID != AXInventory.systemBundleID }
+    private func scanMenuBar() async {
+        let apps = AXInventory.runningApps()
+        update(with: await AXInventory.scan(apps), running: apps)
+    }
+
+    private func update(with scanned: [MenuBarItem], running apps: [RunningApp]) {
+        var found = scanned.filter { $0.bundleID != AXInventory.systemBundleID }
+        // A hidden app that was tucked behind « (or never drawn) when it got hidden reports no
+        // items at all. It's still listed, without frames, so the popup can reveal it.
+        var seen = Set(found.map(\.bundleID))
+        for app in apps where arrangement.isHidden(app.bundleID) && seen.insert(app.bundleID).inserted {
+            found.append(MenuBarItem(bundleID: app.bundleID, pid: app.pid, name: app.name, bundlePath: app.bundlePath, frames: []))
+        }
+        items = found
         systemFrames = scanned.filter { $0.bundleID == AXInventory.systemBundleID }.flatMap(\.frames)
     }
 

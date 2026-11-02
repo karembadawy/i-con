@@ -4,8 +4,8 @@ import os
 
 /// Finds other apps' status items through Accessibility (each app's `AXExtrasMenuBar`).
 enum AXInventory {
-    /// Owns the system items (clock, Control Center, …) and macOS 27's overflow chevron. They stay
-    /// under macOS control, but their frames matter: overflowed items are stacked on the chevron.
+    /// Owns the system items (clock, Control Center, …) and macOS 27's « overflow button. They stay
+    /// under macOS control, but their frames matter for captures and the clock.
     nonisolated static let systemBundleID = "com.apple.MenuBarAgent"
 
     static func runningApps() -> [RunningApp] {
@@ -49,6 +49,25 @@ enum AXInventory {
         // An open menu keeps the app busy until it closes, so a timeout still means it was pressed.
         let result = AXUIElementPerformAction(items[0], kAXPressAction as CFString)
         return result == .success || result == .cannotComplete
+    }
+
+    /// macOS's « button, a MenuBarAgent item shown when the bar is too full. Apps tucked behind
+    /// it report no status items at all until it's expanded, which shows them inline left of the
+    /// notch. Its identifier then gains `-expanded`; Esc doesn't collapse it.
+    nonisolated private static let overflowIdentifier = "menu-bar-overflow-indicator"
+
+    /// Expands or collapses «. Returns whether it was pressed: false when « isn't shown or is
+    /// already in that state.
+    nonisolated static func setOverflowExpanded(_ expanded: Bool, agentPID: pid_t) -> Bool {
+        for item in statusItems(pid: agentPID) {
+            guard let identifier = copy(item, "AXIdentifier") as? String,
+                  identifier.hasPrefix(overflowIdentifier)
+            else { continue }
+            guard identifier.hasSuffix("-expanded") != expanded else { return false }
+            AXUIElementSetMessagingTimeout(item, 0.25)
+            return AXUIElementPerformAction(item, kAXPressAction as CFString) == .success
+        }
+        return false
     }
 
     // MARK: - AX helpers

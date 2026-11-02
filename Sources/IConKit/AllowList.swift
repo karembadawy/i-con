@@ -2,7 +2,8 @@
 /// loses its status items, so the list is "everything running except hidden apps".
 public enum AllowList {
     /// System item IDs (clock = 2, sound = 5, Wi-Fi = 6, Control Center = 8, …).
-    /// All of them are allowed so Apple's own items stay under macOS control.
+    /// All of them are allowed so Apple's own items stay under macOS control. macOS 27.2 keeps
+    /// only 0–8 and silently drops the rest; the wider range is headroom for new items.
     public static let systemItems = Array(0..<64)
 
     /// Returns the bundle IDs to allow, or nil when no hidden app is running
