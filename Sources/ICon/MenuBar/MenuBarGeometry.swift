@@ -46,8 +46,9 @@ enum MenuBarGeometry {
         return nil
     }
 
-    /// Whether the app shows a menu or popover: a window above the normal level that sits below
-    /// the menu bar (its status item itself lives in the menu bar).
+    /// Whether the app shows a menu or popover: a window above the normal level that reaches
+    /// below the menu bar. Apps own no windows in the bar itself on macOS 27, and a menu can start
+    /// above the top of the screen (seen for one opened from an item that « showed inline).
     static func hasOpenMenu(pid: pid_t) -> Bool {
         onScreenWindows().contains { window in
             guard window[kCGWindowOwnerPID as String] as? pid_t == pid,
@@ -55,7 +56,7 @@ enum MenuBarGeometry {
                   let bounds = window[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds)
             else { return false }
-            return rect.minY > 20
+            return rect.maxY > 40
         }
     }
 

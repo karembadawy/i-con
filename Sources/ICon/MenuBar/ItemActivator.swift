@@ -7,6 +7,8 @@ final class ItemActivator {
     weak var state: AppState?
 
     private var revealedPID: pid_t?
+    /// Whether this reveal expanded macOS's « to reach a tucked item; collapsed again at the end.
+    private var expandedOverflow = false
     private var monitor: Any?
     private var watcher: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.karembadawy.icon", category: "activator")
@@ -21,11 +23,19 @@ final class ItemActivator {
             // Give the menu bar a moment to lay the item out.
             try? await Task.sleep(for: .milliseconds(250))
             guard revealedPID == item.pid else { return }
+            let pid = item.pid
+            guard await reachTuckedItem(pid: pid) else {
+                // Superseded by another reveal, or nothing to press. Then keep it shown a while
+                // in case its item turns up late; `watch` hides it again as before.
+                guard revealedPID == pid else { return }
+                logger.info("\(item.bundleID, privacy: .public) has no item in the menu bar")
+                watch(pid: pid)
+                return
+            }
             if !state.icons.hasCapture(item.bundleID) {
                 await state.captureIcons(for: [item.bundleID], waitForLayout: false)
             }
 
-            let pid = item.pid
             let pressed = await Task.detached { AXInventory.pressOnlyItem(pid: pid) }.value
             if pressed {
                 logger.info("Opened \(item.bundleID, privacy: .public)")
@@ -51,7 +61,46 @@ final class ItemActivator {
         guard revealedPID != nil else { return }
         revealedPID = nil
         logger.info("Hiding the revealed app again")
-        Task { await state?.setRevealed(nil) }
+        let collapse = expandedOverflow
+        expandedOverflow = false
+        Task {
+            // Collapse first: once the app is hidden, « may vanish while still expanded.
+            if collapse { await Self.setOverflowExpanded(false) }
+            // A newer reveal started meanwhile sets its own app.
+            guard revealedPID == nil else { return }
+            await state?.setRevealed(nil)
+        }
+    }
+
+    /// Makes sure the revealed app has an item to press. One that doesn't fit is tucked behind
+    /// macOS's « and reports no items, so « is expanded until the reveal ends. Returns false when
+    /// the app still has no item or the reveal was superseded; « is then collapsed again.
+    private func reachTuckedItem(pid: pid_t) async -> Bool {
+        if await Self.hasItems(pid: pid) { return true }
+        guard await Self.setOverflowExpanded(true) else { return false }
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(100))
+            guard revealedPID == pid else { break }
+            if await Self.hasItems(pid: pid), revealedPID == pid {
+                expandedOverflow = true
+                logger.info("Expanded « to reach a tucked item")
+                return true
+            }
+        }
+        await Self.setOverflowExpanded(false)
+        return false
+    }
+
+    private static func hasItems(pid: pid_t) async -> Bool {
+        await Task.detached { !AXInventory.frames(pid: pid).isEmpty }.value
+    }
+
+    @discardableResult
+    private static func setOverflowExpanded(_ expanded: Bool) async -> Bool {
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: AXInventory.systemBundleID).first
+        else { return false }
+        let pid = agent.processIdentifier
+        return await Task.detached { AXInventory.setOverflowExpanded(expanded, agentPID: pid) }.value
     }
 
     /// Hides the app again once its menu closes, on a click elsewhere, or after a minute.

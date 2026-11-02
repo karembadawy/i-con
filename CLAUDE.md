@@ -49,13 +49,16 @@ i-con uses the private exam lockdown ("assessment mode") restriction instead:
 - **Allow-list semantics:** apps not in the allow-list lose their status items.
 - **Process-bound:** if i-con quits or crashes, macOS restores everything.
 - **Allow-list contents:** `AllowList.bundleIDs` returns i-con's own ID plus every running app's bundle ID, minus hidden apps, plus a temporarily revealed app. It returns `nil`, meaning "no restriction at all", when no hidden app is running.
-- **System items:** IDs `0..<64` are always allowed.
+- **System items:** IDs `0..<64` are always allowed. macOS 27.2 keeps only 0–8 and silently drops the rest (read back via `allowedSystemItems`); the wider range is headroom for new items.
+- **`-initWithUnrestrictedMenuBarItems`** is new in 27.2 (absent in 27.0.1). It behaves exactly like no restriction, so it's no use for hiding.
 - **No flash:** the shim activates the new assertion before invalidating the old one.
 - **Only apps in `/Applications` (or Apple's `/System/…`) are recognized.** While any restriction is active, macOS hides every icon from an app installed elsewhere (`~/Applications`, Xcode build folders, temp folders), whatever the allow-list says. Verified with snapshots using a probe app copied to each location. `AppLocation.isRecognized` encodes the rule, and the popup warns about visible apps outside it (`AppState.appsMacOSWillHide`).
 - **Launch detection:** watch `NSWorkspace.shared.runningApplications` with KVO. `didLaunchApplicationNotification` isn't sent for `LSUIElement` (menu-bar-only) apps, which are exactly the apps with status items. A launch triggers an immediate apply, which adds the new app to the allow-list before its status item appears, then rescans at +2s and +8s. Verified: an `/Applications` app launched while hiding is drawn within a second, with no restart needed.
 - **Don't "restart" the restriction to reveal icons.** An earlier attempt to fix missing icons by switching the restriction off and on was based on a misleading probe self-report, and was removed. Every case it targeted was really the location rule above.
-- **The restriction also blocks Notification Center.** Clicking the clock does nothing while it's active (verified: the panel opens with i-con quit and not while hiding). `ClockClickHandler` watches for a mouse-up on the clock, which `AppState.isClock` defines as the rightmost `MenuBarAgent` item in its bar. It then suspends hiding (`setHidingSuspended`, an allow-list of `nil`), replays the click, and resumes once the Notification Center panel closes. The panel is a `com.apple.notificationcenterui` window with layer > 0; its desktop widgets have negative layers. Hidden icons show while the panel is open. Two-finger-swipe opening isn't covered.
-- **macOS's « overflow button is hidden while a restriction is active,** like Now Playing and Fast User Switching. The menu bar right of the notch is often full (app menus like Xcode's spill past the notch), and icons macOS tucks into « become unreachable.
+- **The restriction also blocks Notification Center.** Clicking the clock does nothing while it's active (verified on 27.0.1 and 27.2: the panel opens with i-con quit and not while hiding; Notification Center connects to MenuBarAgent's restriction server as a monitor). `ClockClickHandler` watches for a mouse-up on the clock, which `AppState.isClock` defines as the rightmost `MenuBarAgent` item in its bar. It then suspends hiding (`setHidingSuspended`, an allow-list of `nil`), replays the click, and resumes once the Notification Center panel closes. The panel is a `com.apple.notificationcenterui` window with layer > 0; its desktop widgets have negative layers. Hidden icons show while the panel is open. Two-finger-swipe opening isn't covered.
+- **macOS's « overflow button works while a restriction is active, since 27.2.** On 27.0.1 it was hidden, so tucked icons were unreachable. The bar right of the notch is often full (app menus like Xcode's spill past the notch), and macOS tucks from the left, so i-con's own ▾ is usually the first icon tucked.
+  - **Tucked apps report no AX items at all** until « is expanded. Pressing it turns it into » and shows them inline left of the notch, with real frames.
+  - « is a `MenuBarAgent` item with `AXIdentifier` `menu-bar-overflow-indicator`, which becomes `menu-bar-overflow-indicator-expanded`. AXPress toggles it. Esc doesn't collapse it.
 - **Completion handler:** its first argument is `nil` on success. The shim takes it as `void *` and only bridges it when it looks like an object pointer.
 
 ### Data flow
@@ -76,9 +79,9 @@ i-con uses the private exam lockdown ("assessment mode") restriction instead:
 ### Inventory: `AXInventory`
 
 - Scans every running `.app` in parallel, reading the app's `AXExtrasMenuBar` children, with a 0.1s messaging timeout per element.
-- `com.apple.MenuBarAgent` owns the system items and macOS's overflow chevron. It is scanned only to get obstacle frames (`AppState.systemFrames`) and is never shown in the UI.
-- **Accessibility frames don't tell you whether an icon is drawn.** Hidden apps keep stale frames, and icons hidden for other reasons (overflow, the location rule) report real-looking positions too. Never infer visibility from AX; use a `--snapshot`. Exclude hidden apps when checking overlaps.
-- **Deleted icons:** an app whose icon macOS removed reports no AX items at all.
+- `com.apple.MenuBarAgent` owns the system items and macOS's « button. It is scanned only to get obstacle frames (`AppState.systemFrames`) and is never shown in the UI.
+- **Accessibility frames don't tell you whether an icon is drawn.** Hidden apps keep stale frames if they were drawn when hidden, and icons hidden for other reasons can report real-looking positions too. Never infer visibility from AX; use a `--snapshot`. Exclude hidden apps when checking overlaps.
+- **No AX items at all:** an app whose icon macOS removed, an app tucked behind «, a hidden app that was tucked (or never drawn) when it got hidden, and (on 27.2) an app outside `/Applications` launched while hiding. So `AppState.update` adds every running hidden app the scan missed, without frames, or the popup would silently lose it.
 
 ### Icon images: `IconCapture` and `IconCache`
 
@@ -95,9 +98,12 @@ The sequence when the user clicks a hidden icon:
 1. Dismiss the popup.
 2. Add the app to the allow-list (`setRevealed`).
 3. Wait 250ms.
-4. Call `AXPress` on the app's only status item.
-5. If AXPress fails, post a CGEvent click at the item's frame center and warp the cursor back.
-6. Re-hide the app when its menu or popover window closes (an app-owned window with layer > 0 below the menu bar), on a click outside that app's windows, or after 60s.
+4. If the app reports no items, it didn't fit and is tucked behind «: expand « and poll up to 1s for its items (`reachTuckedItem`).
+5. Call `AXPress` on the app's only status item.
+6. If AXPress fails, post a CGEvent click at the item's frame center and warp the cursor back.
+7. Re-hide the app when its menu or popover window closes, on a click outside that app's windows, or after 60s. Collapse « first if this reveal expanded it; once the app is hidden, « can vanish while still expanded.
+
+Menu windows are app-owned windows with layer > 0 that reach below the menu bar (`hasOpenMenu`). Apps own no windows in the bar itself on 27, and some menus start above the screen top: the input menu's window is at y = −41. A click outside the menu while it's open is swallowed by the menu, so the window check is what ends most reveals.
 
 Two rules:
 - **`AXPress` on a status item returns `-25204` (`kAXErrorCannotComplete`) while the menu opens.** Treat that as success. Clicking again on top of it double-activates the item.
@@ -105,7 +111,10 @@ Two rules:
 
 ## macOS 27 facts (verified on this machine unless noted)
 
-- **Now Playing and Fast User Switching are always hidden while any restriction is active.** That held with system IDs up to 65,535, with all 232 running process bundle IDs, and with string IDs. The user accepted using Control Center for both. Don't try to "fix" this again without new information.
+First verified on 27.0.1 (26A434). On 27.2 (26B123) the «, system ID, Notification Center, Fast User Switching and location findings were rechecked with snapshots.
+
+- **Now Playing and Fast User Switching are always hidden while any restriction is active.** That held with system IDs up to 65,535, with all 232 running process bundle IDs, and with string IDs. On 27.2 the configuration keeps only system IDs 0–8, so neither has an ID to allow. The user accepted using Control Center for both. Don't try to "fix" this again without new information.
+- **Seen once on 27.2, cause unknown:** the copy of i-con launched at the first login after updating hid *everything* except MenuBarAgent's items, its own ▾ included, until it was relaunched. Its assertions were balanced (one live), and a fresh process with the same allow-list behaved. If it recurs, capture MenuBarAgent's `visibilityRestriction` log and a `--snapshot` before relaunching.
 - **Hiding is per app:** all of an app's icons move together.
 - **⌘-dragging an icon out of the menu bar can delete it.** Confirmed for Apple's icons (input menu, Weather): macOS sets the owner's `NSStatusItem Visible…` key to 0. Third-party behavior on 27 is unconfirmed, so treat every icon as at risk and never synthesize ⌘-drags.
   - **Restore the input menu:** `defaults write com.apple.TextInputMenu visible -bool true`, then `defaults delete com.apple.TextInputMenuAgent "NSStatusItem VisibleCC Item-0"`, then `killall TextInputMenuAgent`.
@@ -134,6 +143,8 @@ The terminal Claude runs in has Accessibility permission but not Screen Recordin
 - **Drive the UI:** `AXPress` on i-con's own status item toggles the popup. Posted `CGEvent` `mouseMoved` events simulate the pointer; `CGWarpMouseCursorPosition` doesn't generate events.
 - **Check captures:** view the cached PNGs in `~/Library/Application Support/i-con/icons/` directly.
 - **Ground truth for visibility: `--snapshot`.** Running `open -g -n /Applications/i-con.app --args --snapshot <png>` starts a second, inert i-con that saves the WindowServer menu bar window (on white) and quits. Launched through `open`, it uses i-con's own Screen Recording grant. Crop the right of the notch with `sips -c 66 1300 --cropOffset 0 1640` (Retina) and look at it. To test a scenario, quit i-con, drive the restriction from a small ObjC program, and snapshot each stage.
+- **MenuBarAgent's side of the restriction:** `/usr/bin/log show --last 5m --info --predicate 'process == "MenuBarAgent" AND category == "visibilityRestriction"'` lists every activate and invalidate. The `statusItems` category logs `Creating status item …, isAllowed:`. i-con's own info logs live in memory only and are gone within the hour. Subscribing as a monitor (`VisibilityRestrictionMonitorSession`) from a test program got no callbacks; it likely needs an entitlement.
+- **Synthetic clicks on popup tiles:** a CGEvent click within about a second of opening the popup by AXPress was ignored, while later clicks worked. A tile's AX frame is the tile itself, except that a tile alone in its row reported the whole row's width.
 - **Don't trust a status item's own self-report either.** A probe app's `button.window.frame` and `occlusionState` claimed "visible" for icons the snapshot showed weren't drawn.
 - **Probe apps:** a throwaway `LSUIElement` app with one `NSStatusItem` (a text title like ◆ is easy to spot) is useful for testing launches. Remember the location rule when placing it, and clean up its `defaults` domain and LaunchServices registration (`lsregister -u`) afterwards.
 
